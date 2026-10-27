@@ -10,6 +10,34 @@ import org.junit.Test
 
 class TranslationTest {
     @Test
+    fun theUsersOwnThinkingDepthIsSentAsReasoningEffort() {
+        val on = ByokTranslator.on("high")
+        assertNotNull(on)
+        assertEquals("on:high", on!!.name)
+        assertEquals(mapOf("reasoning_effort" to "high"), on.params)
+        // it is a variant like any other: the stored name finds it again
+        assertEquals("on:high", ByokTranslator.variant("on:high")?.name)
+        assertEquals(mapOf("reasoning_effort" to "high"), ByokTranslator.variant("on:high")?.params)
+        assertEquals("on:high", ByokTranslator.current("on:high"))
+        assertTrue(ByokTranslator.isOn("on:high"))
+        assertFalse(ByokTranslator.isOn("thinking"))
+        assertFalse(ByokTranslator.isOn(null))
+        // no depth, or one too long: nothing to send
+        assertNull(ByokTranslator.on(""))
+        assertNull(ByokTranslator.on("   "))
+        assertNull(ByokTranslator.on("x".repeat(ByokTranslator.MAX_DEPTH + 1)))
+        // the switches that turn thinking off still work, and a name nobody knows is not a thinking-on setting
+        assertEquals("thinking", ByokTranslator.variant("thinking")?.name)
+        assertNull(ByokTranslator.variant("nonsense"))
+        assertNull(ByokTranslator.variant(null))
+        assertNull(ByokTranslator.current("nonsense"))
+        // a thinking model needs room for its reasoning, and it answers later than one that only answers
+        assertEquals(1024, mtMaxTokens(Target.ZH, true))
+        assertEquals(160, mtMaxTokens(Target.ZH))
+        assertEquals(256, mtMaxTokens(Target.of(Lang.EN)))
+    }
+
+    @Test
     fun reasoningIsNeverShownAndOnlyEndedAnswersAreUsable() {
         val r = MtResult("<think>\n\n</think>\n\n各位，请祈祷B站不要倒闭吧</think>", 'e', 87, 12)
         assertEquals("各位，请祈祷B站不要倒闭吧", r.text); assertTrue(r.usable)

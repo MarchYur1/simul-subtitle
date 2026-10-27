@@ -31,6 +31,12 @@ interface SessionPrefs {
     fun byokService(): ByokService?
     fun byokVariant(url: String, model: String): String?
     fun setByokVariant(url: String, model: String, name: String?)
+    /**
+     * The user's own thinking setting for a service: "on:<depth>" (thinking on, with that depth) or null (off: the app
+     * looks for a switch that turns thinking off). Null by default, so an app without the setting keeps the old way.
+     */
+    fun byokThink(url: String, model: String): String? = null
+    fun setByokThink(url: String, model: String, value: String?) {}
 }
 
 /** The speech models a session runs on, released by its session thread when it ends. */
@@ -296,13 +302,19 @@ class CaptionSession(private val host: SessionHost) {
                 val t = s.byok!!
                 val system = byokSystem(s.scene, s.source, s.target)
                 fun known(k: ByokService): Pair<Boolean, ByokTranslator.ThinkingOff?> {
+                    // the user's own setting wins: thinking on with their depth, so no switch is looked for and no
+                    // probe is run (nothing is billed for a search that cannot help)
+                    val on = prefs.byokThink(k.url, k.model)?.let { ByokTranslator.on(it.removePrefix(ByokTranslator.ON_PREFIX)) }
+                    if (on != null) return true to on
                     val stored = prefs.byokVariant(k.url, k.model)
                     if (stored != null) return true to ByokTranslator.variant(stored)
                     return if (order.knows(k)) true to order.result(k) else false to null
                 }
                 // the log names the service really used (never the key): the one saved last may still be in its probe
                 fun use(k: ByokService, variant: ByokTranslator.ThinkingOff?) = Triple(
-                    ByokTranslator(k, system, variant, maxTokens = mtMaxTokens(s.target)), k,
+                    // a thinking model needs room for its reasoning and answers later
+                    ByokTranslator(k, system, variant, maxTokens = mtMaxTokens(s.target, ByokTranslator.isOn(variant?.name)),
+                        deadlineMs = if (ByokTranslator.isOn(variant?.name)) THINKING_DEADLINE_MS else 8_000), k,
                     mapOf("variant" to variant?.name, "system" to system, "mt_url" to k.url, "mt_model" to k.model) + k.log())
                 var (ready, variant) = known(t)
                 if (!ready) {
@@ -667,7 +679,8 @@ class CaptionSession(private val host: SessionHost) {
             "keepSentences", "keepChars" -> main.post { if (board.setLimits(prefs.keepSentences, prefs.keepChars)) refresh() }
             // translation settings: the session rebuilds its setup off the UI thread, from the next sentence on
             in setupKeys -> { order?.changed(); onSetupChange?.invoke() }
-            else -> if (key.startsWith("jevKey:")) { order?.changed(); onSetupChange?.invoke() }
+            // jevKey:* and byokThink:* are matched apart: they carry a service id in their name
+            else -> if (key.startsWith("jevKey:") || key.startsWith("byokThink:")) { order?.changed(); onSetupChange?.invoke() }
         }
     }
 
@@ -699,6 +712,8 @@ class CaptionSession(private val host: SessionHost) {
         val contextN = if (prefs.contextOn) prefs.contextSentences else 0
         // the BYOK fields from one read; an unfilled profile in settings keeps the service already in use
         val byok = prefs.byokService()?.takeIf { it.model.isNotEmpty() } ?: fallback
+        /** the user's thinking setting for the BYOK service ("on:<depth>" or null: off) */
+        val byokThink = byok?.let { prefs.byokThink(it.url, it.model) }
         val provider = prefs.jevProvider
         // the address and its key from one read
         private val customService = if (provider == JevProvider.CUSTOM) prefs.jevCustomService() else null

@@ -647,6 +647,11 @@ private class ByokDraft {
     var clearKey by mutableStateOf(false)
     var userAgent by mutableStateOf<String?>(null)
     var headers by mutableStateOf<List<Pair<String, String>>?>(null)
+    /** the saved thinking setting of this service ("on:<depth>" or null: off), the switch this one replaces */
+    private val think = prefs.byokThink(prefs.byokUrl, prefs.byokModel)
+    /** thinking on (with a depth) instead of looking for a switch that turns it off */
+    var thinkOn by mutableStateOf(ByokTranslator.isOn(think))
+    var thinkDepth by mutableStateOf(think?.removePrefix(ByokTranslator.ON_PREFIX) ?: "")
 }
 private val byokDraft = mutableStateOf(ByokDraft())
 
@@ -763,8 +768,11 @@ private fun Byok(running: Boolean) {
         }
     }
     Spacer(Modifier.height(6.dp))
-    Hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。")
     val d = byokDraft.value
+    Hint(if (d.thinkOn)
+        "填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n已开启思考：不自动找关闭思考的参数，按你填的深度请求，每句都要等模型想完，字幕会比说话人慢。"
+    else
+        "填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：尽量能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。关不掉的模型可以在下面打开「开启思考」，自己指定思考深度。")
     val saved = prefs.byokKey?.takeUnless { d.clearKey }
     var msg by byokResult
     Label("服务地址（OpenAI 兼容）")
@@ -777,6 +785,17 @@ private fun Byok(running: Boolean) {
         else -> "API Key：没填（不需要 key 的服务可以空着）"
     })
     Field(d.key, { d.key = it }, if (saved != null) "输入新的 key 来替换" else "在这里粘贴 key", password = true, enabled = !busy)
+    // thinking: off = the app looks for a switch that turns it off (and probes for one once per model);
+    // on = the user's own depth, sent as it is, with no search and no probe
+    SwitchRow("开启思考",
+        if (d.thinkOn) "不会自动找关闭思考的参数，直接按下面的深度请求。有的模型不支持关闭思考，就用这个。"
+        else "默认让 App 自己找关闭思考的参数：第一次用这个模型时会依次试几种（每种一次请求，都会计费）。模型关不掉思考时，可以打开这里自己指定深度。",
+        d.thinkOn, enabled = !busy) { d.thinkOn = it }
+    if (d.thinkOn) {
+        Label("思考深度")
+        Field(d.thinkDepth, { d.thinkDepth = it }, "例如 low、medium、high、max", enabled = !busy)
+        Hint("会作为 reasoning_effort 发给服务。开启后每句最多等 ${THINKING_DEADLINE_MS / 1000} 秒，字幕会比说话人慢，语速快时可能跟不上。")
+    }
     // save what is in the boxes; null when something is wrong (and says what)
     fun save(): String? {
         val u = d.url.trim(); val m = d.model.trim(); val k = d.key.trim()
@@ -787,10 +806,15 @@ private fun Byok(running: Boolean) {
             m.any { it.isWhitespace() } -> { msg = "⚠ 模型 ID 里不要有空格"; return null }
             k.isNotEmpty() && !Jev.validKey(k) -> { msg = "⚠ key 里有空格、换行或特殊字符，请重新复制"; return null }
         }
+        // the thinking setting belongs to this address and model, like the switch it replaces
+        val depth = d.thinkDepth.trim()
+        if (d.thinkOn && depth.isEmpty()) { msg = "⚠ 还没填思考深度"; return null }
+        if (d.thinkOn && depth.length > ByokTranslator.MAX_DEPTH) { msg = "⚠ 思考深度最多 ${ByokTranslator.MAX_DEPTH} 个字符"; return null }
         // one edit; a running session switches to the saved service from the next sentence, as one change
         if (!prefs.saveByok(u, m, k.ifEmpty { if (d.clearKey) "" else null }, d.userAgent, d.headers)) {
             msg = "⚠ key 或请求头没能存进${if (isWindows) "加密文件" else "钥匙串"}，请再试一次；钥匙串要求授权时请选「允许」。"; return null
         }
+        prefs.setByokThink(u, m, if (d.thinkOn) ByokTranslator.onName(depth) else null)
         byokDraft.value = ByokDraft()
         return ByokTranslator.chatUrl(u).second
     }
@@ -804,15 +828,37 @@ private fun Byok(running: Boolean) {
         // (two probes would bill twice); clearing the key is a draft change like the rest, saved by 保存
         TextBtn("清除 key", enabled = saved != null && !busy) { d.clearKey = true; d.key = "" }
         Btn("保存", enabled = !busy) {
-            if (save() != null) msg = if (running) "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。" else null
+            if (save() != null) msg = if (running)
+                (if (d.thinkOn) "已保存，字幕从下一句开始用新的设置。"
+                 else "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。")
+            else null
         }
         Btn(if (testing) "测试中…" else "测试连接", primary = true, enabled = !running && !busy) {
             val chatUrl = save() ?: return@Btn
             val m = prefs.byokModel; val service = prefs.byokService() ?: return@Btn
-            val t = ByokTranslator(service, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), null,
-                maxTokens = mtMaxTokens(prefs.targetLang))
+            // thinking on: the user's own setting, so no search for a switch and no probe (nothing is billed for it)
+            val on = if (d.thinkOn) ByokTranslator.on(d.thinkDepth.trim()) else null
+            val t = ByokTranslator(service, byokSystem(prefs.scene, prefs.sourceLang, prefs.targetLang), on,
+                maxTokens = mtMaxTokens(prefs.targetLang, on != null),
+                deadlineMs = if (on != null) THINKING_DEADLINE_MS else 8_000,
+                firstContentMs = if (on != null) 30_000L else FIRST_CONTENT_MS)
             byokTest.value = t; msg = null
             Thread {
+                if (on != null) {
+                    // one request with the user's own setting: is the service usable, and did it answer?
+                    val r = t.translate(byokUser(ByokTranslator.PROBE_TEXT))
+                    java.awt.EventQueue.invokeLater {
+                        if (byokTest.value !== t) return@invokeLater // cancelled (captions started)
+                        byokTest.value = null
+                        byokResult.value = when {
+                            r == null -> "✗ 不能用：没有回应"
+                            r.usable -> "✓ 可以用。已开启思考（深度 ${on.params["reasoning_effort"]}），收到第一个字 ${r.firstContentMs ?: "?"} ms。" +
+                                (if (r.thinking) "（这次检测到模型在思考，思考内容不会显示）" else "（这次没检测到思考）") + "。\n测试译文：${r.text.take(60)}"
+                            else -> "✗ 不能用：${ByokTranslator.why(r)}"
+                        }
+                    }
+                    return@Thread
+                }
                 val steps = mutableListOf<ByokTranslator.Step>()
                 val v = t.probe(steps)
                 java.awt.EventQueue.invokeLater {
@@ -837,7 +883,10 @@ private fun Byok(running: Boolean) {
     val chat = ByokTranslator.chatUrl(prefs.byokUrl).second
     val known = chat?.let { prefs.byokVariant(it, prefs.byokModel) }
     Hint(msg ?: when {
-        testing -> "正在依次尝试关闭思考的参数（最多 ${ByokTranslator.THINKING_OFF.size} 次，每次最多 8 秒，每次都会计费）…"
+        testing -> if (d.thinkOn) "正在用你填的思考深度测试连接…"
+            else "正在依次尝试关闭思考的参数（最多 ${ByokTranslator.THINKING_OFF.size} 次，每次最多 8 秒，每次都会计费）…"
+        d.thinkOn -> "已开启思考（深度 ${d.thinkDepth.trim().ifEmpty { "未填" }}）：不会自动找关闭思考的参数，直接按这个深度请求。" +
+            "每句最多等 ${THINKING_DEADLINE_MS / 1000} 秒，字幕会比说话人慢。实际请求地址：${chat ?: prefs.byokUrl}"
         chat == null || prefs.byokModel.isEmpty() -> "填好地址、模型 ID 和 key 后点「测试连接」。第一次使用时会依次试最多 ${ByokTranslator.THINKING_OFF.size} 种关闭思考的参数（每种是一次计费请求），找到没检测到思考的就记住。"
         known == ByokTranslator.NONE_WORKED -> "⚠ 上次测试：已知的参数都关不掉这个模型的思考，翻译可能很慢。仍然可以使用。"
         known != null -> "上次测试可用（用的参数：${ByokTranslator.variant(known)?.label}，那次没检测到思考）。实际请求地址：$chat"
@@ -957,7 +1006,7 @@ private fun LogsTab() {
 @Composable
 private fun AboutTab() {
     Group("使用说明") {
-        Text("0. 第一次用：在「设置 › 翻译 › LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型要能关闭思考，回复越快越好。\n" +
+        Text("0. 第一次用：在「设置 › 翻译 › LLM API」里填好你自己的 LLM 服务（OpenAI 兼容接口的地址、模型 ID 和 API Key），点「测试连接」。模型最好能关闭思考（关不掉的话，在同一页打开「开启思考」自己填思考深度），回复越快越好。\n" +
             "1. 点首页的「开始字幕」。" + (if (isWindows) "" else "第一次会问你是否允许录制系统声音，请选「允许」（以后可以在 系统设置 › 隐私与安全性 › 屏幕与系统录音 里改）。") + "\n" +
             "2. 字幕浮在所有窗口上面：按住拖动可以换位置；点一下字幕，四个角会出现小箭头，拖它可以改大小。\n" +
             "3. 点一下字幕会出现工具栏：调字号、调背景、切换显示方式、开关原文和用时、锁定，或者停止。锁定后位置和大小都固定，点字幕不再出工具栏，只在右下角出一个解锁按钮，点它就解锁。\n" +

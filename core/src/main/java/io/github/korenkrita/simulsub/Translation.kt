@@ -169,8 +169,18 @@ fun openThought(s: String): Boolean = s.lastIndexOf("<think>") > s.lastIndexOf("
 /**
  * Output cap of one translation. 160 tokens covered the longest Chinese output measured (segments are up to ~10 s with
  * Jev). Other targets (Thai, Hindi, Arabic…) take more tokens per sentence: 256, not tuned or measured.
+ * A thinking model spends part of its tokens on reasoning before it answers, so it needs more room than one that only
+ * answers: [THINKING_MAX_TOKENS], not measured.
  */
-fun mtMaxTokens(target: Target) = if (target.lang == Lang.ZH) 160 else 256
+const val THINKING_MAX_TOKENS = 1024
+fun mtMaxTokens(target: Target, thinking: Boolean = false) =
+    if (thinking) THINKING_MAX_TOKENS else if (target.lang == Lang.ZH) 160 else 256
+
+/**
+ * How long one translation may take when the user asked for thinking: the model reasons first and answers later, so
+ * the usual 8 s (a model that answers at once) are not enough.
+ */
+const val THINKING_DEADLINE_MS = 20_000L
 
 /** Translation: no translated text this long after sending fails the caption. */
 const val FIRST_CONTENT_MS = 5_000L
@@ -420,6 +430,7 @@ fun byokUser(text: String, notes: List<String> = emptyList(), previous: List<Str
  *
  * Thinking must be off, but there is no standard switch: [THINKING_OFF] lists the ones we know. [variant] is the one
  * [probe] found for this URL + model (null: none worked, the request carries no switch and may think and be slow).
+ * The user may ask for thinking on instead (see [on]): then the request carries their depth and no probe runs at all.
  * Reasoning in an answer is never shown; it is only flagged ([MtResult.thinking]).
  */
 /**
@@ -701,8 +712,28 @@ class ByokTranslator(
             ThinkingOff("none", "不加参数", emptyMap()),
         )
         fun variant(name: String?) = THINKING_OFF.firstOrNull { it.name == name }
+            ?: if (name != null && name.startsWith(ON_PREFIX)) on(name.removePrefix(ON_PREFIX)) else null
         /** A stored probe result that still holds; null (never tested) for one from an older list of switches. */
         fun current(stored: String?) = stored?.takeIf { it == NONE_WORKED || variant(it) != null }
+
+        /** the prefix a stored thinking-on setting carries ("on:<depth>") */
+        const val ON_PREFIX = "on:"
+        /** the longest depth the user may type */
+        const val MAX_DEPTH = 32
+
+        /**
+         * The user's own setting: thinking on, with a depth ("low", "medium", "high", "max"...). The depth is sent as
+         * reasoning_effort, the field the OpenAI-compatible APIs use for it. A service without such a field ignores it
+         * (or refuses the request, which the user then sees as an error).
+         */
+        fun on(depth: String): ThinkingOff? = depth.trim().takeIf { it.isNotEmpty() && it.length <= MAX_DEPTH }
+            ?.let { ThinkingOff(onName(it), "reasoning_effort: $it", mapOf("reasoning_effort" to it)) }
+
+        /** the stored name of a thinking-on setting */
+        fun onName(depth: String) = ON_PREFIX + depth.trim()
+
+        /** true when [name] is a thinking-on setting (not a switch that turns thinking off) */
+        fun isOn(name: String?) = name != null && name.startsWith(ON_PREFIX)
 
         /**
          * The chat completions URL for what the user typed (see [httpUrl]): a path ending in /v1 (or

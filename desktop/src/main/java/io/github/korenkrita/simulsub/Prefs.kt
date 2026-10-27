@@ -192,6 +192,12 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     }
     override fun byokVariant(url: String, model: String): String? = ByokTranslator.current(str("byokVariant:$url|$model"))
     override fun setByokVariant(url: String, model: String, name: String?) = put("byokVariant:$url|$model" to name)
+    /**
+     * The user's own thinking setting for this service: "on:<depth>" (thinking on, with that depth) or null (off: the
+     * app looks for a switch that turns thinking off). Per address and model, like the switch it replaces.
+     */
+    override fun byokThink(url: String, model: String): String? = str("byokThink:$url|$model")
+    override fun setByokThink(url: String, model: String, value: String?) = put("byokThink:$url|$model" to value)
     /** address and model are there (the key may be left empty, for a free service) */
     val byokReady: Boolean get() = ByokTranslator.chatUrl(byokUrl).second != null && byokModel.isNotEmpty()
 
