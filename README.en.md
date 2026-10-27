@@ -95,6 +95,7 @@ Download the latest package for your platform from the [Releases](../../releases
 - **Background &amp; data**:
   - Captures audio from the default playback device via WASAPI loopback and automatically follows device switches (e.g., plugging in headphones).
   - Closing the main window keeps subtitles running in the system tray; right-click the tray icon and choose **Quit** (退出) to exit completely.
+    - Only one copy runs at a time: clicking `SimulSub.exe` again while the app sits in the tray does not start a second one, it brings the running app's window back to the front.
   - Network requests follow the system proxy and fall back to direct connections when a proxy cannot reach the target host.
   - Preferences and optional logs live in `%APPDATA%\SimulSub\`. API keys are encrypted with Windows DPAPI (bound to your Windows user account) in `keys.json`.
 

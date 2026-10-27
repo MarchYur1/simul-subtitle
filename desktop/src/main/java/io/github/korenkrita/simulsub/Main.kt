@@ -25,6 +25,8 @@ val sysaudioFile: File = System.getProperty("compose.application.resources.dir")
     ?: File(System.getProperty("simulsub.root") ?: ".", "tools/mac-capture/build/sysaudio")
 
 fun main() {
+    // one app at a time: another copy is already running (it shows its window), so this one stops
+    if (!SingleInstance.start()) return
     ByokTranslator.defaultUserAgent = "SimulSub/$APP_VERSION"
     // the translation service, Jev and the update check go through the system's proxy, as a browser does (a proxy
     // app's "system proxy" mode; without it, some services refuse the direct connection, e.g. Jev with HTTP 451)
@@ -58,6 +60,6 @@ fun main() {
     System.getProperty("compose.application.resources.dir")?.let { System.setProperty("sherpa_onnx.native.path", it) }
     // quitting / SIGTERM: the helper only notices a lost reader when it next writes, so end it here (not via the UI
     // thread, which may already be gone)
-    Runtime.getRuntime().addShutdownHook(Thread { CaptionService.killCapture() })
+    Runtime.getRuntime().addShutdownHook(Thread { CaptionService.killCapture(); SingleInstance.stop() })
     app()
 }

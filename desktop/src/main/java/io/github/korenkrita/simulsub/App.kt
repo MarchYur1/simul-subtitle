@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.LinearProgressIndicator
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -51,6 +52,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.awt.Desktop
+import java.awt.EventQueue
 import java.io.File
 import java.net.URI
 import java.util.concurrent.TimeUnit
@@ -83,6 +85,25 @@ fun app() = application {
     // Windows: the taskbar's own theme (it can be dark while apps are light), checked again every few seconds
     var trayDark by remember { mutableStateOf(taskbarDark()) }
     if (isWindows) LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
+    // the main window's state, out of the if below: a copy of the app that starts later asks for the window
+    val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
+    var showCount by remember { mutableIntStateOf(0) }
+    var mainWindow by remember { mutableStateOf<java.awt.Window?>(null) }
+    // a copy of the app that starts while this one runs asks it to show its window (see SingleInstance)
+    LaunchedEffect(Unit) {
+        SingleInstance.showWindow = {
+            if (mainOpen) {
+                // the window is open: bring it to the front
+                state.isMinimized = false
+                mainWindow?.let { w -> EventQueue.invokeLater { w.toFront(); w.requestFocus() } }
+                SingleInstance.windowShown()
+            } else {
+                // it was closed to the menu bar: open it again
+                mainOpen = true
+                showCount++
+            }
+        }
+    }
 
     Tray(icon = TrayIcon(running, trayDark), tooltip = "同传字幕", menu = {
         if (running) {
@@ -101,9 +122,28 @@ fun app() = application {
     }
 
     if (mainOpen) {
-        val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
         // closing the window keeps the app (and its captions) in the menu bar
         Window(onCloseRequest = { mainOpen = false }, state = state, title = "同传字幕", icon = painterResource("icon.png")) {
+            // the window itself, for a copy of the app that asks for it (see SingleInstance)
+            DisposableEffect(Unit) {
+                mainWindow = window
+                SingleInstance.windowHandle = runCatching { com.sun.jna.Native.getWindowID(window) }.getOrDefault(0L)
+                onDispose {
+                    mainWindow = null
+                    SingleInstance.windowHandle = 0
+                }
+            }
+            // a copy asked for the window: put it in front and answer it
+            LaunchedEffect(showCount) {
+                if (showCount > 0) {
+                    state.isMinimized = false
+                    window.toFront()
+                    window.requestFocus()
+                    // the copy that asked puts this window in front by its handle
+                    SingleInstance.windowHandle = runCatching { com.sun.jna.Native.getWindowID(window) }.getOrDefault(0L)
+                    SingleInstance.windowShown()
+                }
+            }
             // the title bar is the system's: follow the page colour, not just macOS's own setting
             if (!isWindows) LaunchedEffect(dark) { window.rootPane.putClientProperty("apple.awt.windowAppearance", if (dark) "NSAppearanceNameDarkAqua" else "NSAppearanceNameAqua") }
             Themed(dark) {
