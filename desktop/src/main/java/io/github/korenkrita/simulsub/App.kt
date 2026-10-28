@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -45,6 +46,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.window.ApplicationScope
 import androidx.compose.ui.window.Tray
 import androidx.compose.ui.window.Window
+import androidx.compose.ui.window.WindowPosition
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import kotlinx.coroutines.delay
@@ -86,7 +88,9 @@ fun app() = application {
     var trayDark by remember { mutableStateOf(taskbarDark()) }
     if (isWindows) LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
     // the main window's state, out of the if below: a copy of the app that starts later asks for the window
-    val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
+    // a desktop window: wider than tall, and always in the middle of the screen (the default position is the
+    // window manager's own, which puts it wherever it likes)
+    val state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(900.dp, 640.dp))
     var showCount by remember { mutableIntStateOf(0) }
     var mainWindow by remember { mutableStateOf<java.awt.Window?>(null) }
     // a copy of the app that starts while this one runs asks it to show its window (see SingleInstance)
@@ -192,24 +196,27 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
     var tab by remember { mutableIntStateOf(0) }
     // 设置 › 翻译, where the LLM API is filled in (the home card's service row and its 去填写)
     val openTranslate = { tab = 1; settings = true }
-    Column(Modifier.fillMaxSize()) {
-        if (!settings) {
-            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("同传字幕", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Grow()
-                TextBtn("设置") { settings = true }
-            }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) { Home(startError, setStartError, openTranslate) }
-        } else {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp)) {
-                TextBtn("‹ 返回") { settings = false }
-                Text("设置", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
-            }
-            Box(Modifier.padding(horizontal = 18.dp)) {
-                Seg(listOf(0 to "字幕", 1 to "翻译", 2 to "页面", 3 to "记录", 4 to "关于"), tab) { tab = it }
-            }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 24.dp)) {
-                when (tab) { 0 -> CaptionTab(); 1 -> TranslateTab(); 2 -> PageTab(); 3 -> LogsTab(); else -> AboutTab() }
+    // the window is wide (a desktop window), the page keeps a comfortable column width in the middle of it
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.widthIn(max = 760.dp).fillMaxSize()) {
+            if (!settings) {
+                Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("同传字幕", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                    Grow()
+                    TextBtn("设置") { settings = true }
+                }
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) { Home(startError, setStartError, openTranslate) }
+            } else {
+                Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp)) {
+                    TextBtn("‹ 返回") { settings = false }
+                    Text("设置", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
+                }
+                Box(Modifier.padding(horizontal = 18.dp)) {
+                    Seg(listOf(0 to "字幕", 1 to "翻译", 2 to "页面", 3 to "记录", 4 to "关于"), tab) { tab = it }
+                }
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 24.dp)) {
+                    when (tab) { 0 -> CaptionTab(); 1 -> TranslateTab(); 2 -> PageTab(); 3 -> LogsTab(); else -> AboutTab() }
+                }
             }
         }
     }
@@ -1106,7 +1113,8 @@ private fun ApplicationScope.AutoUpdateCheck() {
     LaunchedEffect(Unit) { if (prefs.autoUpdate && APP_VERSION_CODE > 0) { delay(3_000); checkNow(manual = false) } }
     val r = offered.value ?: return
     val dark = when (prefs.theme) { "light" -> false; "dark" -> true; else -> isSystemInDarkTheme() }
-    Window(onCloseRequest = { offered.value = null }, title = "同传字幕 有新版本", state = rememberWindowState(size = DpSize(440.dp, 360.dp))) {
+    Window(onCloseRequest = { offered.value = null }, title = "同传字幕 有新版本",
+        state = rememberWindowState(position = WindowPosition(Alignment.Center), size = DpSize(440.dp, 360.dp))) {
         Themed(dark) {
             Column(Modifier.fillMaxSize().background(C.bg).padding(18.dp).verticalScroll(rememberScrollState())) {
                 UpdateBox(r)
